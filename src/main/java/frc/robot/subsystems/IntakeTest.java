@@ -11,12 +11,17 @@ import com.revrobotics.SparkMaxPIDController.ArbFFUnits;
 import com.revrobotics.RelativeEncoder;
 import com.revrobotics.SparkMaxPIDController;
 
+import edu.wpi.first.math.trajectory.Trajectory;
+import edu.wpi.first.math.trajectory.TrapezoidProfile;
+import edu.wpi.first.math.trajectory.TrapezoidProfile.State;
 import edu.wpi.first.networktables.GenericEntry;
 import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
 import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import edu.wpi.first.wpilibj2.command.WaitUntilCommand;
 
 public class IntakeTest extends SubsystemBase {
 
@@ -28,8 +33,9 @@ public class IntakeTest extends SubsystemBase {
   private static final double kNativeToRad = Math.PI / 2.0 / 12.0;
   private static final double kNominalVolt = 10.0;
 
-  private static final double kNeutralRad = Math.toRadians(-35.0);
-  private static final double kHorizontalPercent = 0.06;
+  private static final double kNeutralRad = Math.toRadians(-25.0);
+  private static final double kHorizontalPercentLeft = 0.06;
+  private static final double kHorizontalPercentRight = 0.08;
 
   private static final double kTargetTolRad = Math.toRadians(5.0);
   private static final double kP = 0.003; //have to continue tweaking
@@ -38,8 +44,9 @@ public class IntakeTest extends SubsystemBase {
 
   private static final double kAngVelRad = Math.toRadians(40.0); //used to be 45
   private static final double kAngAccRed = Math.toRadians(20.0); //used to be 90
+  private static final TrapezoidProfile.Constraints kProfileConstraints = new TrapezoidProfile.Constraints(kAngVelRad, kAngAccRed);
 
-  private static final double kRetractRad = Math.toRadians(45.0);
+  private static final double kRetractRad = Math.toRadians(70.0);
   private static final double kExtendRad = Math.toRadians(0.0);
   private static final double kRollerPercent = 0.5;
 
@@ -61,8 +68,9 @@ public class IntakeTest extends SubsystemBase {
 
 
   // Process variables
-  private double m_targetRad = kNeutralRad;
-
+  private double m_targetRad = 0.0;
+  private TrapezoidProfile m_profile = null;
+  private double m_profileStart = -1.0;
 
   /** Creates a new Intake. */
   public IntakeTest() {
@@ -114,23 +122,43 @@ public class IntakeTest extends SubsystemBase {
     // Set target to current when robot is disabled to prevent sudden motion on enable
     if (DriverStation.isDisabled()) {
       m_targetRad = m_encoderLeft.getPosition();
-      //m_targetRad = m_encoderRight.getPosition();
-     
+    }
 
+    // Clear motion profile if target is reached
+    if (this.onTarget()) {
+      this.m_profile = null;
     }
 
     // Set reference in periodic to allow for arbitrary PID computation
-    m_pidLeft.setReference(m_targetRad, ControlType.kSmartMotion, 0, this.computeFeedForward( m_encoderLeft.getPosition()), ArbFFUnits.kPercentOut);
-    m_pidRight.setReference(m_targetRad, ControlType.kSmartMotion, 0, this.computeFeedForward( m_encoderRight.getPosition()), ArbFFUnits.kPercentOut);
+    if (m_profile != null) {
+      final var profTime = Timer.getFPGATimestamp() - m_profileStart;
+      final var profTarget = m_profile.calculate(profTime);
 
-  
+      m_pidLeft.setReference(profTarget.position, ControlType.kPosition, 0,
+      this.computeFeedForward(profTarget.position, kHorizontalPercentLeft));
+      m_pidRight.setReference(profTarget.position, ControlType.kPosition, 0,
+      this.computeFeedForward(profTarget.position, kHorizontalPercentRight));
+    }
+    else {
+      m_pidLeft.setReference(m_targetRad, ControlType.kPosition, 0,
+      this.computeFeedForward(m_targetRad, kHorizontalPercentLeft));
+      m_pidRight.setReference(m_targetRad, ControlType.kPosition, 0,
+      this.computeFeedForward(m_targetRad, kHorizontalPercentRight));
+    }
 
-   m_angleEntry.setDouble(Math.toDegrees(m_encoderLeft.getPosition()));
-   m_percentEntry.setDouble(m_pivotLeft.getAppliedOutput());
-   m_targetEntry.setDouble(Math.toDegrees(m_targetRad));
-   m_pidEntry.setDouble(this.computeFeedForward(m_encoderLeft.getPosition()));
+    m_angleEntry.setDouble(Math.toDegrees(m_encoderLeft.getPosition()));
+    m_percentEntry.setDouble(m_pivotLeft.getAppliedOutput());
+    m_targetEntry.setDouble(Math.toDegrees(m_targetRad));
+    m_pidEntry.setDouble(this.computeFeedForward(m_encoderLeft.getPosition(), kHorizontalPercentLeft));
 
-   System.out.printf("Pos L %.2f    Pos R %.2f    Pos* %.0f    FF %.2f    Cmd %.2f\n", Math.toDegrees(m_encoderLeft.getPosition()), Math.toDegrees(m_encoderRight.getPosition()), Math.toDegrees(m_targetRad), this.computeFeedForward(m_encoderLeft.getPosition()), m_pivotLeft.getAppliedOutput());
+   System.out.printf(
+    "Pos L %.2f    Pos R %.2f    Pos* %.0f    FF %.2f    Cmd %.2f\n",
+    Math.toDegrees(m_encoderLeft.getPosition()),
+    Math.toDegrees(m_encoderRight.getPosition()),
+    Math.toDegrees(m_targetRad),
+    this.computeFeedForward(m_encoderLeft.getPosition(),
+    kHorizontalPercentLeft),
+    m_pivotLeft.getAppliedOutput());
   }
 
   /**
@@ -138,8 +166,8 @@ public class IntakeTest extends SubsystemBase {
    *
    * @return feed-forward (percent)
    */
-  private double computeFeedForward(double angle) {
-    return kHorizontalPercent * Math.cos(angle);
+  private double computeFeedForward(double angle, double horizontalPercent) {
+    return horizontalPercent * Math.cos(angle);
     
   }
 
@@ -154,6 +182,22 @@ public class IntakeTest extends SubsystemBase {
   }
 
   /**
+   * Generate a trapezoidal motion profile to reach an angle from the current desired state
+   * @param targetRad target angle (rad)
+   */
+  private void generateProfile(double targetRad) {
+    final double startRad = this.m_profile == null ? m_targetRad :
+    this.m_profile.calculate(Timer.getFPGATimestamp() - m_profileStart).position;
+
+    final double startVel = this.m_profile == null ? 0.0 :
+    this.m_profile.calculate(Timer.getFPGATimestamp() - m_profileStart).velocity;
+
+    m_profile = new TrapezoidProfile(kProfileConstraints, new State(targetRad, 0), new State(startRad, startVel));
+    m_profileStart = Timer.getFPGATimestamp();
+    m_targetRad = targetRad;
+  }
+
+  /**
    * Set the roller speed and pivot to a given angle
    *
    * @param rollerPercent roller speed (percent)
@@ -164,7 +208,8 @@ public class IntakeTest extends SubsystemBase {
     //return this.runOnce(() -> m_roller.set(rollerPercent))
         //.andThen(this.run(() -> m_targetRad = pivotRad).until(this::onTarget));
 
-        return this.run(() -> m_targetRad = pivotRad).until(this::onTarget);
+    return this.runOnce(() -> this.generateProfile(pivotRad))
+    .andThen(new WaitUntilCommand(this::onTarget));
 
   }
 
@@ -192,11 +237,11 @@ public class IntakeTest extends SubsystemBase {
    * @return instant command
    */
   public Command stop() {
-    //return this.runOnce(() -> m_roller.set(0.0));
-    return this.runOnce(() -> System.out.println("stopped"));
+    //return this.run(() -> m_roller.set(0.0));
+    return this.run(() -> System.out.println("stopped"));
   }
 
   public Command activate(double changeBy) {
-    return this.runOnce(() -> m_targetRad = changeBy);
+    return this.runOnce(() -> m_targetRad += changeBy);
   }
 }

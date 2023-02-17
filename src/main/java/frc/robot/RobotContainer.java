@@ -48,8 +48,10 @@ public class RobotContainer {
     // Schedule `ExampleCommand` when `exampleCondition` changes to `true`
     new Trigger(m_exampleSubsystem::exampleCondition)
         .onTrue(new ExampleCommand(m_exampleSubsystem));
-    m_driverController.povUp().onTrue(m_intake.activate(Math.toRadians(40.0)));
+    m_driverController.povUp().onTrue(m_intake.activate(Math.toRadians(10.0)));
     m_driverController.povDown().onTrue(m_intake.activate(0.0));
+    m_driverController.povLeft().onTrue(m_intake.extend());
+    m_driverController.povRight().onTrue(m_intake.retract());
 
     // Schedule `exampleMethodCommand` when the Xbox controller's B button is pressed,
     // cancelling on release.
